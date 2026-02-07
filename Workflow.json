@@ -1,0 +1,120 @@
+{
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-384, 1024],
+      "id": "manual-trigger",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.apify.com/v2/acts/curious_coder~linkedin-jobs-scraper/runs?token={{$env.APIFY_TOKEN}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n    \"count\": 100,\n    \"scrapeCompany\": true,\n    \"splitByLocation\": false,\n    \"urls\": [\n        \"https://www.linkedin.com/jobs/search/?keywords=developer\"\n    ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-160, 1024],
+      "id": "apify-request",
+      "name": "HTTP Request1"
+    },
+    {
+      "parameters": {
+        "url": "https://api.apify.com/v2/acts/curious_coder~linkedin-jobs-scraper/runs/last/dataset/items?token={{$env.APIFY_TOKEN}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [80, 1024],
+      "id": "results-fetch",
+      "name": "Results"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Role": "={{ $json.title }}",
+            "Company": "={{ $json.company }}{{ $json.location }}",
+            "Score": "={{ $json.score }}",
+            "Summary": "={{ $json.reason }}",
+            "URL": "={{ $json.url }}"
+          }
+        }
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1152, 1024],
+      "id": "gsheet-write",
+      "name": "Write to MasterPlan"
+    },
+    {
+      "parameters": {
+        "model": "llama3.2:latest",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [912, 1408],
+      "id": "ollama-model",
+      "name": "Ollama Chat Model1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Logic to merge AI output with original job data\nconst originalJobs = $('Results').all();\nreturn $input.all().map((item, index) => {\n  const rawOutput = item.json.output || item.json.text || \"\";\n  let aiData = { score: 0, reason: \"Parse Error\" };\n  const jsonMatch = rawOutput.match(/{[\\s\\S]*?}/);\n  if (jsonMatch) { try { aiData = JSON.parse(jsonMatch[0]); } catch (e) {} }\n  let jobData = originalJobs[index] ? originalJobs[index].json : {};\n  return {\n    json: {\n      title: jobData.title,\n      company: jobData.companyName || jobData.company,\n      location: jobData.location,\n      url: jobData.link || jobData.url,\n      score: Number(aiData.score) || 0,\n      reason: aiData.reason || \"No reason provided\"\n    }\n  };\n});"
+      },
+      "id": "json-enforcer",
+      "name": "JSON Enforcer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [736, 1024]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=System Role: You are a recruiter profiling a candidate.\n\nCANDIDATE CV:\n[INSERT NAME]\n[INSERT ROLE/SKILLS]\n[INSERT EXPERIENCE]\n\nJOB OPPORTUNITY:\nTitle: {{ $json.title }}\nCompany: {{ $json.companyName }}\nDescription: {{ $json.descriptionText }}\n\nTASK:\nAssign a suitability score (0-10).\n\nOUTPUT FORMAT:\n{ \"score\": 8, \"reason\": \"summary\" }"
+      },
+      "id": "ai-scoring",
+      "name": "The Brain (Scoring)1",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [352, 1024]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=System Role: Draft a tailored cover letter based on the candidate's profile.\n\nCANDIDATE CV:\n[INSERT CV DATA HERE]\n\nJOB DETAILS:\nRole: {{ $json.title }}\nCompany: {{ $json.company }}\n\nTASK:\nDraft a professional cover letter."
+      },
+      "id": "ai-drafting",
+      "name": "The Closer (Drafting)1",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [1408, 1088]
+    }
+  ],
+  "connections": {
+    "When clicking ‘Execute workflow’": { "main": [[{ "node": "HTTP Request1", "type": "main", "index": 0 }]] },
+    "HTTP Request1": { "main": [[{ "node": "Results", "type": "main", "index": 0 }]] },
+    "Results": { "main": [[{ "node": "The Brain (Scoring)1", "type": "main", "index": 0 }]] },
+    "The Brain (Scoring)1": { "main": [[{ "node": "JSON Enforcer", "type": "main", "index": 0 }]] },
+    "JSON Enforcer": { "main": [[{ "node": "Write to MasterPlan", "type": "main", "index": 0 }]] },
+    "Write to MasterPlan": { "main": [[{ "node": "The Closer (Drafting)1", "type": "main", "index": 0 }]] },
+    "Ollama Chat Model1": { "ai_languageModel": [[{ "node": "The Brain (Scoring)1", "type": "ai_languageModel", "index": 0 }, { "node": "The Closer (Drafting)1", "type": "ai_languageModel", "index": 0 }]] }
+  }
+}
